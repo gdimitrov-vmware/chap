@@ -45,6 +45,9 @@ Supported file types include the following:
 If that doesn't work out of the box, see [CONTRIBUTING.md](CONTRIBUTING.md) for
 pre-requisites and other details.
 
+`chap` has optional REPL support for command history and tab completion when
+built with the [replxx](https://github.com/AmokHuginnsson/replxx)  library.
+
 Once built, here's a trivial example of an interactive session:
 
 ```

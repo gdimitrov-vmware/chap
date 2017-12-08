@@ -10,9 +10,24 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
 
+# set where to find additional cmake modules if any
+set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
+
 # chap
 
+find_package(Replxx)
+
 add_executable(chap src/FileAnalyzer.cpp)
+target_compile_definitions(chap
+                           PRIVATE $<$<BOOL:${REPLXX_FOUND}>:WITH_REPLXX>)
+
+# An expectation here is that if Replxx is found, the library will be static
+# linked. This is not enforced by the find module but it is desirable to make
+# it easier to distribute the chap binary.
+# It happens to work at present because the default build for Replxx
+# produces only a static library.
+target_link_libraries(chap
+                      PRIVATE $<$<BOOL:${REPLXX_FOUND}>:Replxx::Replxx>)
 install(TARGETS chap DESTINATION bin)
 
 # Tests

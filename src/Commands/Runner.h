@@ -13,6 +13,10 @@
 #include <vector>
 #include "LineInfo.h"
 
+#ifdef WITH_REPLXX
+#include <replxx.h>
+#endif
+
 namespace chap {
 namespace Commands {
 
@@ -33,10 +37,8 @@ class Input {
     input->open(inputPath.c_str());
     if (input->fail()) {
       delete input;
-      std::cerr << "Failed to open script \""
-                << inputPath
-                << "\".\n";
-      char *openFailCause = strerror(errno);
+      std::cerr << "Failed to open script \"" << inputPath << "\".\n";
+      char* openFailCause = strerror(errno);
       if (openFailCause) {
         std::cerr << openFailCause << "\n";
       }
@@ -53,12 +55,39 @@ class Input {
     }
     _scriptContext.clear();
   }
+#ifndef WITH_REPLXX
+  bool ReadLine(std::istream& is, std::string& out) {
+    return getline(is, out, '\n');
+  }
+#else
+  bool ReadLine(std::istream& is, std::string& out) {
+    if (IsInScript()) {
+      return getline(is, out, '\n');
+    }
+
+    // ANSI_COLOR_GREEN
+    static char const* prompt = "\x1b[1;32mchap\x1b[0m>  ";
+
+    char* line = replxx_input(prompt);
+
+    if (line == nullptr) {
+      return false;
+    }
+
+    replxx_history_add(line);
+
+    out = line;
+    replxx_free(line);
+    return true;
+  }
+#endif
+
   void GetTokens(Tokens& tokens) {
     tokens.clear();
     while (!_inputStack.empty()) {
       std::istream& input = *(_inputStack.top());
       std::string cmdLine;
-      while (getline(input, cmdLine, '\n')) {
+      while (ReadLine(input, cmdLine)) {
         bool checkNextLine = false;
         if (cmdLine[cmdLine.size() - 1] == '\\') {
           // not quite correct if we support \ style escaping
@@ -94,9 +123,9 @@ class Input {
         do {
           std::string::size_type tokenPos = pos;
           pos = cmdLine.find_first_of(" \t", pos);
-          std::string token(cmdLine, tokenPos, (pos == std::string::npos)
-                                                   ? pos
-                                                   : (pos - tokenPos));
+          std::string token(
+              cmdLine, tokenPos,
+              (pos == std::string::npos) ? pos : (pos - tokenPos));
           tokens.push_back(token);
           pos = cmdLine.find_first_not_of(" \t", pos);
         } while (pos != std::string::npos);
@@ -110,8 +139,8 @@ class Input {
           LineInfo& lineInfo = _scriptContext.back();
           size_t line = lineInfo._line;
           std::string& path = lineInfo._path;
-          std::cerr << "Error at line " << std::dec << line
-                    << " of script \""  << path << "\"\n";
+          std::cerr << "Error at line " << std::dec << line << " of script \""
+                    << path << "\"\n";
           if (input.fail()) {
             std::cerr << "Failed to read a command line.\n";
           }
@@ -225,7 +254,7 @@ template <typename T>
 Output& operator<<(Output& output, T v) {
   output.GetTopOutputStream() << v;
   return output;
-};
+}
 
 class Error {
  public:
@@ -264,7 +293,7 @@ Error& operator<<(Error& error, T v) {
   error.FlushPendingErrorContext();
   std::cerr << v;
   return error;
-};
+}
 
 class Context {
  public:
@@ -363,7 +392,7 @@ class Context {
 
       if (!_output.PushTarget(_redirectPath)) {
         _error << "Failed to open " << _redirectPath << " for writing.\n";
-        char *openFailCause = strerror(errno);
+        char* openFailCause = strerror(errno);
         if (openFailCause) {
           std::cerr << openFailCause << "\n";
         }
@@ -515,6 +544,9 @@ class Command {
   virtual void Run(Context& context) = 0;
   virtual void ShowHelpMessage(Context& context) = 0;
   const virtual std::string& GetName() const = 0;
+  virtual void GetSecondTokenCompletions(
+      const std::string& prefix,
+      std::function<void(const std::string&)> cb) const {}
 
  protected:
   const std::string _name;
@@ -534,6 +566,39 @@ class Runner {
 
   {}
 
+#ifdef WITH_REPLXX
+  void CompletionHook(char const* pref, int ctx, replxx_completions* lc) {
+    std::string prefix(pref);
+    const auto startPos = prefix.find_first_not_of(" \t");
+    prefix =
+        startPos == std::string::npos ? std::string{} : prefix.substr(startPos);
+
+    const auto spacePos = prefix.find_first_of(" \t");
+    const auto subCmdPos = prefix.find_first_not_of(" \t", spacePos);
+    for (const auto& c : _commands) {
+      const std::string& cname = c.first;
+      if (!cname.compare(0, prefix.size(), prefix)) {
+        replxx_add_completion(lc, cname.c_str());
+        continue;
+      }
+      if (spacePos == std::string::npos) {
+        continue;
+      }
+      if (prefix.compare(0, spacePos, cname)) {
+        continue;
+      }
+
+      std::string scPrefix = subCmdPos == std::string::npos
+                                 ? std::string{}
+                                 : prefix.substr(subCmdPos);
+
+      c.second->GetSecondTokenCompletions(
+          scPrefix, [lc](const std::string& completion) {
+            replxx_add_completion(lc, completion.c_str());
+          });
+    }
+  }
+#endif
   void AddCommand(const std::string& commandName,
                   CommandCallback commandCallback) {
     _commandCallbacks[commandName].push_back(commandCallback);
@@ -556,9 +621,11 @@ class Runner {
   }
 
   void WritePromptIfNeeded() {
+#ifndef WITH_REPLXX
     if (!_input.IsInScript()) {
       _error << "> ";
     }
+#endif
   }
 
   void ShowHelpMessage() {
@@ -595,8 +662,7 @@ class Runner {
         std::map<std::string, Command*>::iterator itCommands =
             _commands.find(topic);
         if (itCommands == _commands.end()) {
-          _output << "\"" << topic << "\" is not a valid command"
-                                      " name.\n";
+          _output << "\"" << topic << "\" is not a valid command name.\n";
           ShowHelpMessage();
         } else {
           itCommands->second->ShowHelpMessage(context);
@@ -627,6 +693,14 @@ class Runner {
   }
 
   void RunCommands() {
+#ifdef WITH_REPLXX
+    replxx_install_window_change_handler();
+    replxx_set_completion_callback(
+        [](char const* prefix, int ctx, replxx_completions* lc, void* ud) {
+          static_cast<Runner*>(ud)->CompletionHook(prefix, ctx, lc);
+        },
+        this);
+#endif
     while (true) {
       WritePromptIfNeeded();
       try {
@@ -710,6 +784,9 @@ class Runner {
         _input.TerminateAllScripts();
       }
     }
+#ifdef WITH_REPLXX
+    replxx_history_free();
+#endif
   }
 
   ScriptContext _scriptContext;

@@ -32,6 +32,9 @@ any questions about the CLA process, please refer to our
 
 * __clang-format__ - We use clang-format's 'Google' style to format code.
 
+* __replxx__ - We use [replxx](https://github.com/AmokHuginnsson/replxx) for
+    command history and tab completion if available on the system during build.
+
 ### Building
 
 ```bash
